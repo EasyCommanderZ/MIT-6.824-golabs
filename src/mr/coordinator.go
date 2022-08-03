@@ -19,8 +19,8 @@ type Coordinator struct {
 	nMap    int
 	nReduce int
 
-	taskQueue    chan TaskInfo
-	queueEmpty   bool
+	taskQueue chan TaskInfo
+	// queueEmpty   bool
 	taskTraceMap map[string]TaskInfo
 
 	Phase string
@@ -100,9 +100,6 @@ func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) e
 		reply.Accept = true
 	}
 
-	// c.checkPhase()
-	// checkpoint()
-	// println(len(c.taskQueue), len(c.taskTraceMap))
 	oldPhase := c.Phase
 	if len(c.taskQueue) == 0 && len(c.taskTraceMap) == 0 && c.Phase != DONE {
 		if c.Phase == MAP {
@@ -178,7 +175,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		nMap:         len(files),
 		nReduce:      nReduce,
 		taskQueue:    make(chan TaskInfo, int(math.Max(float64(nReduce), float64(len(files))))),
-		queueEmpty:   false,
 		taskTraceMap: make(map[string]TaskInfo),
 	}
 
@@ -207,9 +203,6 @@ func (c *Coordinator) retriveTimeoutTasks() {
 	for {
 		time.Sleep(500 * time.Millisecond)
 		c.lck.Lock()
-		// blocked here for lock
-		// checkpoint()
-		// println(len(c.taskTraceMap))
 		for _, task := range c.taskTraceMap {
 			// quit job will not be retrived
 			if time.Now().After(task.Deadline) {
