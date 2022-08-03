@@ -26,33 +26,37 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-type getTaskArgs struct {
-	LastTaskId   int
-	LastTaskType int
+type AssignTaskArgs struct {
+	// LastTaskId   int
+	// LastTaskType int
 }
 
-type getTaskReply struct {
-	info    TaskInfo
-	nMap    int
-	nReduce int
+type AssignTaskReply struct {
+	Info    TaskInfo
+	NMap    int
+	NReduce int
 }
 
-type reportTaskArgs struct {
-	taskID int
+type ReportTaskArgs struct {
+	TaskID   int
+	TaskType string
 }
 
-type reportTaskReply struct {
+type ReportTaskReply struct {
 	Accept bool
 }
 
 const (
-	mapTask    = 0
-	reduceTask = 1
+	MAP      = "MAP"
+	REDUCE   = "REDUCE"
+	FINISHED = "FINISHED"
+	QUIT     = "QUIT"
+	DONE     = "DONE"
 )
 
 type TaskInfo struct {
 	Id       int
-	TaskType int
+	TaskType string
 	Filename string
 	Deadline time.Time
 }

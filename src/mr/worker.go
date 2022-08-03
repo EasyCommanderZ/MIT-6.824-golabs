@@ -8,6 +8,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,32 +36,61 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
 	// Your worker implementation here.
+	id := os.Getpid()
+	log.SetPrefix("[Worker " + strconv.Itoa(id) + "] ")
+	log.Printf("worker %d start working\n", id)
 
+	for {
+		// 1. request task from coordinator
+		args, reply := AssignTaskArgs{}, AssignTaskReply{}
+		ok := call("Coordinator.AssignTask", &args, &reply)
+		if !ok {
+			log.Println("RPC failed, re-apply")
+			continue
+		}
+		log.Printf("Received %s task %d from Coordinator\n", reply.Info.TaskType, reply.Info.Id)
+		var accept bool
+		switch reply.Info.TaskType {
+		case MAP:
+			{
+				accept = doMapTask(reply.Info.Id, reply.Info.Filename, reply.NReduce, mapf)
+			}
+		case REDUCE:
+			{
+				accept = doReduceTask(reply.Info.Id, reply.NMap, reducef)
+			}
+		case QUIT:
+			{
+				log.Println("worker received QUIT job from Coordinator")
+				goto END
+			}
+		}
+		if accept {
+			log.Printf("%s task %d accepted by Coordinator\n", reply.Info.TaskType, reply.Info.Id)
+		} else {
+			log.Printf("%s task %d rejected by Coordinator\n", reply.Info.TaskType, reply.Info.Id)
+		}
+	}
+END:
+	log.Printf("worker %d quit working\n", id)
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
 }
 
-// func getTask() *TaskInfo {
-// 	args := getTaskArgs{time.Time{}}
-// 	reply := TaskInfo{}
-// 	call("Coordinator.getTask", &args, &reply)
-// 	return &reply
-// }
-
 // do map task :
 // 1. generate intermediate output
 // 2. output intermediate to file (use temp file)
 // 3. report to coordinator
-func doMapTask(taskId int, mapId int, filename string, nReduce int, mapf func(string, string) []KeyValue) {
+func doMapTask(taskId int, filename string, nReduce int, mapf func(string, string) []KeyValue) bool {
 	// do map task && generate intermediate file
 	intermediate := generateIntermediate(filename, mapf)
 	// write intermediate to file
-	writeToFile(taskId, mapId, nReduce, intermediate)
+	writeToFile(taskId, nReduce, intermediate)
 	// report to coordinator
-	reportMapTask(taskId)
+	accept := reportTask(MAP, taskId)
+	return accept
 }
 
 func generateIntermediate(filename string, mapf func(string, string) []KeyValue) []KeyValue {
@@ -77,7 +107,7 @@ func generateIntermediate(filename string, mapf func(string, string) []KeyValue)
 	return intermediate
 }
 
-func writeToFile(taskId int, mapId int, nReduce int, intermediate []KeyValue) {
+func writeToFile(taskId int, nReduce int, intermediate []KeyValue) {
 	hashedkva := make(map[int][]KeyValue)
 	for _, kv := range intermediate {
 		hashedIndex := ihash(kv.Key) % nReduce
@@ -92,23 +122,23 @@ func writeToFile(taskId int, mapId int, nReduce int, intermediate []KeyValue) {
 		for _, kv := range hashedkva[i] {
 			fmt.Fprintf(tmpFile, "%v\t%v\n", kv.Key, kv.Value)
 		}
-		outname := tmpMapOutFile(taskId, mapId, i)
+		outname := tmpMapOutFile(taskId, i)
 		err = os.Rename(tmpFile.Name(), outname)
 		if err != nil {
 			log.Fatalf("cannot rename temp file to %v", outname)
 		}
+		tmpFile.Close()
 	}
 }
 
-func reportMapTask(taskID int) {
-	args, reply := reportTaskArgs{}, reportTaskReply{}
-	args.taskID = taskID
-	call("Coordinator.reportMapTask", &args, &reply)
-	if reply.Accept {
-		log.Printf("accepted\n")
-	} else {
-		log.Printf("not accepted\n")
-	}
+func reportTask(taskType string, taskID int) bool {
+	args, reply := ReportTaskArgs{
+		TaskID:   taskID,
+		TaskType: taskType,
+	}, ReportTaskReply{}
+	call("Coordinator.ReportTask", &args, &reply)
+
+	return reply.Accept
 }
 
 // for sorting by key.
@@ -120,7 +150,7 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // do reduce task
-func doReduceTask(taskId int, nMap int, reducef func(string, []string) string) {
+func doReduceTask(taskId int, nMap int, reducef func(string, []string) string) bool {
 	lines := readIntermediate(taskId, nMap)
 
 	var kva []KeyValue
@@ -139,9 +169,9 @@ func doReduceTask(taskId int, nMap int, reducef func(string, []string) string) {
 
 	filename := tmpReduceOutFile(taskId)
 	outFile, _ := os.CreateTemp(".", "mrtmp-reduce-"+filename)
-	defer outFile.Close()
 
-	for i := 0; i < len(kva); i++ {
+	i := 0
+	for i < len(kva) {
 		j := i + 1
 		for j < len(kva) && kva[j].Key == kva[i].Key {
 			j++
@@ -155,16 +185,19 @@ func doReduceTask(taskId int, nMap int, reducef func(string, []string) string) {
 		fmt.Fprintf(outFile, "%v %v\n", kva[i].Key, output)
 		i = j
 	}
+	outFile.Close()
 	err := os.Rename(outFile.Name(), filename)
 	if err != nil {
 		log.Fatalf("cannot rename temp file to %v", filename)
 	}
+	accept := reportTask(REDUCE, taskId)
+	return accept
 }
 
 func readIntermediate(taskId int, nMap int) []string {
 	var lines []string
 	for i := 0; i < nMap; i++ {
-		filename := finalMapOutFile(taskId, i)
+		filename := finalMapOutFile(i, taskId)
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("file open failed : %s", filename)
@@ -173,8 +206,8 @@ func readIntermediate(taskId int, nMap int) []string {
 		if err != nil {
 			log.Fatalf("file read failed : %s", filename)
 		}
-		lines = append(lines, strings.Split(string(content), "\n")...)
 		file.Close()
+		lines = append(lines, strings.Split(string(content), "\n")...)
 	}
 	return lines
 }

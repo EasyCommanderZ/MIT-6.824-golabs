@@ -2,8 +2,8 @@ package mr
 
 import "fmt"
 
-func tmpMapOutFile(taskID int, mapId int, reduceId int) string {
-	return fmt.Sprintf("intermediate-map-%d-%d-%d", taskID, mapId, reduceId)
+func tmpMapOutFile(mapId int, reduceId int) string {
+	return fmt.Sprintf("intermediate-map-%d-%d", mapId, reduceId)
 }
 
 func finalMapOutFile(mapId int, reduceId int) string {
