@@ -81,6 +81,9 @@ type Raft struct {
 	// leader node
 	nextIndex  []int
 	matchIndex []int
+
+	applyCh   chan ApplyMsg
+	applyCond *sync.Cond
 }
 
 const (
@@ -92,7 +95,7 @@ const (
 const (
 	HeartbeatTimeout = 125
 	ElectionTimeout  = 1000
-	// 根据 Lab Hint 中提高的，timer的时间需要能够使得选举过程在5秒内能够完成
+	// 根据 Lab Hint 中提到的，timer的时间需要能够使得选举过程在5秒内能够完成
 	// 每秒的 heartbeat 被限制在十次以下
 )
 
@@ -207,25 +210,37 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
+	defer rf.persist()
 	// receiver implementation
 	// args from sender, reply from this
+
+	// receiver implementation :
+	// 1. Reply false if term < currentTerm
+	// 2. If votedFor is null or candidatedId, and candidate's log is at least as up-to-date as reveiver's log, grant vote
 	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
-		// reject
+		// reject according to rule 1 and rule 2
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
 	}
 	if args.Term > rf.currentTerm {
-		rf.role = FOLLOWER
-		rf.currentTerm = args.Term
-		rf.votedFor = -1
+		// rf.role = FOLLOWER
+		// rf.currentTerm = args.Term
+		// rf.votedFor = -1
+		rf.setNewTerm(args.Term)
 	}
-
-	rf.votedFor = args.CandidateId
-	rf.electionTimer.Reset(RandomElectionTimeoutDuration())
+	// Lab 2B election restriction
+	// paper section 5.4.1, implementation rule 2
+	lastLog := rf.logs[len(rf.logs)-1]
+	upToDate := args.LastLogTerm > lastLog.Term || (args.LastLogTerm == lastLog.Term && args.LastLogIndex >= lastLog.Index)
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && upToDate {
+		reply.VoteGranted = true
+		rf.votedFor = args.CandidateId
+		rf.electionTimer.Reset(RandomElectionTimeoutDuration())
+	} else {
+		reply.VoteGranted = false
+	}
 	reply.Term = rf.currentTerm
-	reply.VoteGranted = true
 }
 
 //
@@ -277,13 +292,25 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	return index, term, isLeader
+	if rf.role != LEADER {
+		return -1, -1, false
+	}
+	index := rf.logs[len(rf.logs)-1].Index + 1
+	term := rf.currentTerm
+	log := Entry{
+		Command: command,
+		Index:   index,
+		Term:    term,
+	}
+	rf.logs = append(rf.logs, log)
+	rf.persist()
+	rf.appendEntries(false)
+
+	return index, term, true
 }
 
 //
@@ -310,7 +337,7 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
@@ -322,6 +349,8 @@ func (rf *Raft) ticker() {
 			{
 				rf.mu.Lock()
 
+				rf.role = CANDIDATE
+				rf.currentTerm += 1
 				rf.StartElection()
 				rf.electionTimer.Reset(RandomElectionTimeoutDuration())
 
@@ -329,6 +358,7 @@ func (rf *Raft) ticker() {
 			}
 		case <-rf.heartbeatTimer.C:
 			{
+				// DPrintf("Leader heartneart timeout")
 				rf.mu.Lock()
 				if rf.role == LEADER {
 					rf.appendEntries(true)
@@ -337,6 +367,7 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			}
 		}
+
 	}
 }
 
@@ -367,15 +398,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.electionTimer = time.NewTimer(RandomElectionTimeoutDuration())
 	rf.heartbeatTimer = time.NewTimer(HeartbeatTimeoutDuration())
 	rf.commitIndex = 0
+	rf.LastApplied = 0
 	rf.matchIndex = make([]int, len(peers))
 	rf.nextIndex = make([]int, len(peers))
 	rf.logs = make([]Entry, 1)
+
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.applier()
 
 	return rf
 }
