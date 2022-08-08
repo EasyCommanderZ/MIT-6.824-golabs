@@ -16,6 +16,7 @@ func (rf *Raft) StartElection() {
 	}
 	grantedVote := 1
 	var becomeLeader sync.Once
+	rf.persist()
 
 	for peer := range rf.peers {
 		if peer == rf.me {

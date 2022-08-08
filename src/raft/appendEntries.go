@@ -28,7 +28,7 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer rf.persist()
+	// defer rf.persist()
 	DPrintf("Node %d : term %d follower receive AE from %d, args: %v", rf.me, rf.currentTerm, args.LeaderId, args)
 
 	reply.Success = false
@@ -81,12 +81,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
 		if entry.Index <= rf.getLastLog().Index && rf.logs[entry.Index].Term != entry.Term {
 			rf.logs = rf.logs[:entry.Index]
+			rf.persist()
 		}
 
 		// append entries rule 4
 		// Append any new entries not already in the log
 		if entry.Index > rf.getLastLog().Index {
 			rf.logs = append(rf.logs, args.Entries[index:]...)
+			rf.persist()
 			break
 		}
 	}
@@ -222,6 +224,7 @@ func (rf *Raft) setNewTerm(term int) {
 	rf.currentTerm = term
 	rf.role = FOLLOWER
 	rf.votedFor = -1
+	rf.persist()
 }
 
 func (rf *Raft) getLastLog() *Entry {
