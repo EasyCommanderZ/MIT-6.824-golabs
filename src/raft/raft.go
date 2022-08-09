@@ -143,12 +143,7 @@ func (rf *Raft) persist() {
 
 	// 3 attributes need to persist : currentTerm, votedFor, log[]
 	DPrintf("Node %v persist state: {currentTerm: %v, votedFor: %v, logs: %v}", rf.me, rf.currentTerm, rf.votedFor, rf.logs)
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.logs)
-	data := w.Bytes()
+	data := rf.encodeRaftState()
 	rf.persister.SaveRaftState(data)
 }
 
@@ -184,6 +179,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.logs = logs
+		rf.LastApplied, rf.commitIndex = rf.getFirstLog().Index, rf.getFirstLog().Index
 	}
 }
 
@@ -194,6 +190,29 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 
 	// Your code here (2D).
+	rf.mu.Lock()
+	rf.mu.Unlock()
+	DPrintf("{Node %v} service calls CondInstallSnapshot with lastIncludedTerm %v and lastIncludedIndex %v to check whether snapshot is still valid in term %v", rf.me, lastIncludedTerm, lastIncludedIndex, rf.currentTerm)
+
+	// outdated snapshot
+	if lastIncludedIndex <= rf.commitIndex {
+		DPrintf("{Node %v} rejects the snapshot which lastIncludedIndex is %v because commitIndex %v is larger", rf.me, lastIncludedIndex, rf.commitIndex)
+		return false
+	}
+
+	if lastIncludedIndex > rf.getLastLog().Index {
+		rf.logs = make([]Entry, 1)
+	} else {
+		rf.logs = rf.logCompact(rf.logs[lastIncludedIndex-rf.getFirstLog().Index:])
+		rf.logs[0].Command = nil
+	}
+
+	rf.logs[0].Term = lastIncludedTerm
+	rf.logs[0].Index = lastIncludedIndex
+	rf.LastApplied, rf.commitIndex = lastIncludedIndex, lastIncludedIndex
+
+	rf.persister.SaveStateAndSnapshot(rf.encodeRaftState(), snapshot)
+	DPrintf("{Node %v}'s state is {state %v,term %v,commitIndex %v,lastApplied %v,firstLog %v,lastLog %v} after accepting the snapshot which lastIncludedTerm is %v, lastIncludedIndex is %v", rf.me, rf.role, rf.currentTerm, rf.commitIndex, rf.LastApplied, rf.getFirstLog(), rf.getLastLog(), lastIncludedTerm, lastIncludedIndex)
 
 	return true
 }
@@ -204,7 +223,18 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	snapshotIndex := rf.getFirstLog().Index
+	if index <= snapshotIndex {
+		DPrintf("Node %v reject snapshot with index %v, current index %v in term %v", rf.me, index, snapshotIndex, rf.currentTerm)
+		return
+	}
+	DPrintf("Node %v SNAPSHOT at index %v", rf.me, index)
+	rf.logs = rf.logCompact(rf.logs[index-snapshotIndex:])
+	rf.logs[0].Command = nil
+	rf.persister.SaveStateAndSnapshot(rf.encodeRaftState(), snapshot)
 }
 
 //
@@ -325,7 +355,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if rf.role != LEADER {
 		return -1, -1, false
 	}
-	index := rf.logs[len(rf.logs)-1].Index + 1
+	index := rf.getLastLog().Index + 1
 	term := rf.currentTerm
 	log := Entry{
 		Command: command,

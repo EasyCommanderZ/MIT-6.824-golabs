@@ -6,22 +6,26 @@ func (rf *Raft) apply() {
 }
 
 func (rf *Raft) applier() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
 	for !rf.killed() {
-		if rf.commitIndex > rf.LastApplied && rf.getLastLog().Index > rf.LastApplied {
-			rf.LastApplied++
-			appmsg := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.logs[rf.LastApplied].Command,
-				CommandIndex: rf.LastApplied,
-			}
-			rf.mu.Unlock()
-			rf.applyCh <- appmsg
-			rf.mu.Lock()
-		} else {
+		rf.mu.Lock()
+		for rf.LastApplied >= rf.commitIndex {
 			rf.applyCond.Wait()
 		}
+
+		firstLogIndex, commitIndex, lastApplied := rf.getFirstLog().Index, rf.commitIndex, rf.LastApplied
+		entries := make([]Entry, commitIndex-lastApplied)
+		copy(entries, rf.logs[lastApplied-firstLogIndex+1:commitIndex-firstLogIndex+1])
+		rf.mu.Unlock()
+
+		for _, entry := range entries {
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: entry.Index,
+			}
+		}
+		rf.mu.Lock()
+		rf.LastApplied = max(rf.LastApplied, commitIndex)
+		rf.mu.Unlock()
 	}
 }

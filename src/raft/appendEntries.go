@@ -50,6 +50,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if rf.role == CANDIDATE {
 		rf.role = FOLLOWER
 	}
+
+	if args.PrevLogIndex < rf.getFirstLog().Index {
+		reply.Term, reply.Success = 0, false
+		DPrintf("{Node %v} receives unexpected AppendEntriesRequest %v from {Node %v} because prevLogIndex %v < firstLogIndex %v", rf.me, args, args.LeaderId, args.PrevLogIndex, rf.getFirstLog().Index)
+		return
+	}
 	// AE RPC rule 2
 	// Reply false if log doesn't contain an entry at preLogIndex whose term matches prevLogterm
 	if rf.getLastLog().Index < args.PrevLogIndex {
@@ -58,29 +64,29 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Conflict = true
 		reply.XTerm = -1
 		reply.XIndex = -1
-		reply.XLen = len(rf.logs)
+		reply.XLen = len(rf.logs) + rf.getFirstLog().Index - 1
 		return
 	}
-	if rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+	firstLogIndex := rf.getFirstLog().Index
+	if rf.logs[args.PrevLogIndex-firstLogIndex].Term != args.PrevLogTerm {
 		// term not match, find the earliest one, roll back
 		reply.Conflict = true
-		xTerm := rf.logs[args.PrevLogIndex].Term
-		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
-			if rf.logs[xIndex-1].Term != xTerm {
-				reply.XIndex = xIndex
-				break
-			}
+		xTerm := rf.logs[args.PrevLogIndex-firstLogIndex].Term
+		xIndex := args.PrevLogIndex - 1
+		for xIndex >= firstLogIndex && rf.logs[xIndex-firstLogIndex].Term == xTerm {
+			xIndex--
 		}
+		reply.XIndex = xIndex
 		reply.XTerm = xTerm
-		reply.XLen = len(rf.logs)
+		reply.XLen = len(rf.logs) + rf.getFirstLog().Index - 1
 		return
 	}
 
 	for index, entry := range args.Entries {
 		// append entries rule 3
 		// If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
-		if entry.Index <= rf.getLastLog().Index && rf.logs[entry.Index].Term != entry.Term {
-			rf.logs = rf.logs[:entry.Index]
+		if entry.Index <= rf.getLastLog().Index && entry.Index-firstLogIndex >= 0 && rf.logs[entry.Index-firstLogIndex].Term != entry.Term {
+			rf.logs = rf.logs[:entry.Index-firstLogIndex]
 			rf.persist()
 		}
 
@@ -112,27 +118,57 @@ func (rf *Raft) appendEntries(heartbeat bool) {
 		}
 		// leader rule 3
 		if heartbeat || lastLog.Index >= rf.nextIndex[peer] {
-			nextIndex := rf.nextIndex[peer]
-			if nextIndex <= 0 {
-				nextIndex = 1
+			prevLogIndex := rf.nextIndex[peer] - 1
+			if prevLogIndex < rf.getFirstLog().Index {
+				// need snapshot to catch up
+				args := InstallSnapshotArgs{
+					Term:              rf.currentTerm,
+					LastIncludedIndex: rf.getFirstLog().Index,
+					LastIncludedTerm:  rf.getFirstLog().Term,
+					Data:              rf.persister.ReadSnapshot(),
+				}
+				go rf.sendInstallSnapshotAndUpdate(peer, &args)
+			} else {
+				// local entries can catch up
+				// nextIndex := rf.nextIndex[peer]
+				// if nextIndex <= 0 {
+				// 	nextIndex = 1
+				// }
+				// if lastLog.Index+1 < nextIndex {
+				// 	nextIndex = lastLog.Index
+				// }
+				prevLog := rf.logs[prevLogIndex-rf.getFirstLog().Index]
+				firstLogIndex := rf.getFirstLog().Index
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: prevLog.Index,
+					PrevLogTerm:  prevLog.Term,
+					Entries:      make([]Entry, len(rf.logs[prevLogIndex-firstLogIndex+1:])),
+					LeaderCommit: rf.commitIndex,
+				}
+				copy(args.Entries, rf.logs[prevLogIndex-firstLogIndex+1:])
+				DPrintf("%v to %v, args: %v", rf.me, peer, args)
+				go rf.sendAppendEntryAndUpdate(peer, &args)
 			}
-			if lastLog.Index+1 < nextIndex {
-				nextIndex = lastLog.Index
-			}
-			prevLog := rf.logs[nextIndex-1]
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLog.Index,
-				PrevLogTerm:  prevLog.Term,
-				Entries:      make([]Entry, lastLog.Index-nextIndex+1),
-				LeaderCommit: rf.commitIndex,
-			}
-			DPrintf("%v to %v, args: %v", rf.me, peer, args)
-			copy(args.Entries, rf.logs[nextIndex:])
-			go rf.sendAppendEntryAndUpdate(peer, &args)
 		}
 	}
+}
+
+func (rf *Raft) sendInstallSnapshotAndUpdate(serverId int, args *InstallSnapshotArgs) {
+	var reply InstallSnapshotReply
+	ok := rf.sendInstallSnapshot(serverId, args, &reply)
+	if !ok {
+		return
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if reply.Term > rf.currentTerm {
+		rf.setNewTerm(reply.Term)
+	}
+	rf.nextIndex[serverId] = args.LastIncludedIndex + 1
+	rf.matchIndex[serverId] = args.LastIncludedIndex
+	DPrintf("Install SNAPSHOT to %v, nextIndex: %v, matchIndex: %v", serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
 }
 
 func (rf *Raft) sendAppendEntryAndUpdate(serverId int, args *AppendEntriesArgs) {
@@ -157,7 +193,7 @@ func (rf *Raft) sendAppendEntryAndUpdate(serverId int, args *AppendEntriesArgs) 
 			next := match + 1
 			rf.nextIndex[serverId] = max(rf.nextIndex[serverId], next)
 			rf.matchIndex[serverId] = max(rf.matchIndex[serverId], match)
-			DPrintf("reply from %v success, update nextIndex to %v, matchIndex to %v", serverId, rf.nextIndex[serverId], rf.matchIndex[serverId])
+			DPrintf("reply from %v success, update nextIndex to %v, matchIndex to %v, prevLogIndex: %v", serverId, rf.nextIndex[serverId], rf.matchIndex[serverId], args.PrevLogIndex)
 		} else if reply.Conflict {
 			// if AppendEntries fails because of log inconsistency : decrement nextIndex and retry
 			if reply.XTerm == -1 {
@@ -186,7 +222,7 @@ func (rf *Raft) leaderCommitLog() {
 	}
 	DPrintf("leader commit log: commitIndex: %v, lastLogIndex: %v", rf.commitIndex, rf.getLastLog().Index)
 	for i := rf.commitIndex + 1; i <= rf.getLastLog().Index; i++ {
-		if rf.logs[i].Term != rf.currentTerm {
+		if rf.logs[i-rf.getFirstLog().Index].Term != rf.currentTerm {
 			continue
 		}
 		cnt := 1
@@ -205,7 +241,7 @@ func (rf *Raft) leaderCommitLog() {
 
 func (rf *Raft) findLastLogInXTerm(term int) int {
 	for i := rf.logs[len(rf.logs)-1].Index; i > 0; i-- {
-		curTerm := rf.logs[i].Term
+		curTerm := rf.logs[i-rf.getFirstLog().Index].Term
 		if curTerm == term {
 			return i
 		} else if curTerm < term {
@@ -229,4 +265,8 @@ func (rf *Raft) setNewTerm(term int) {
 
 func (rf *Raft) getLastLog() *Entry {
 	return &rf.logs[len(rf.logs)-1]
+}
+
+func (rf *Raft) getFirstLog() *Entry {
+	return &rf.logs[0]
 }
