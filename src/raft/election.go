@@ -26,9 +26,9 @@ func (rf *Raft) StartElection() {
 		go func(peer int) {
 			reply := RequestVoteReply{}
 			if rf.sendRequestVote(peer, &args, &reply) {
-				DPrintf("Node %v receive RequestVoteReply from %v. term : %v, reply : %v", rf.me, peer, rf.currentTerm, reply)
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
+				DPrintf("Node %v receive RequestVoteReply from %v. term : %v, reply : %v", rf.me, peer, rf.currentTerm, reply)
 				if reply.Term > args.Term {
 					rf.setNewTerm(args.Term)
 					return
