@@ -25,3 +25,9 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+func (rf *Raft) GetRaftStateSize() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persister.RaftStateSize()
+}

@@ -1,13 +1,18 @@
 package kvraft
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
 
+	"6.824/labrpc"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	leaderId  int64
+	clientId  int64
+	commandId int64
 }
 
 func nrand() int64 {
@@ -21,6 +26,10 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.leaderId = 0
+	ck.commandId = 0
+
 	return ck
 }
 
@@ -39,7 +48,11 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	value := ck.Command(&CommandArgs{
+		Key: key,
+		Op:  OP_GET,
+	})
+	return value
 }
 
 //
@@ -52,13 +65,39 @@ func (ck *Clerk) Get(key string) string {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 //
-func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
-}
+
+// func (ck *Clerk) PutAppend(key string, value string, op string) {
+// 	// You will have to modify this function.
+
+// }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	// ck.PutAppend(key, value, OP_PUT)
+	ck.Command(&CommandArgs{
+		Key:   key,
+		Value: value,
+		Op:    OP_PUT,
+	})
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	// ck.PutAppend(key, value, APPEND)
+	ck.Command(&CommandArgs{
+		Key:   key,
+		Value: value,
+		Op:    OP_APPEND,
+	})
+}
+
+func (ck *Clerk) Command(args *CommandArgs) string {
+	args.ClientId = ck.clientId
+	args.CommandId = ck.commandId
+	for {
+		reply := CommandReply{}
+		if !ck.servers[ck.leaderId].Call("KVServer.Command", args, &reply) || reply.Err == ErrWrongLeader || reply.Err == ErrTimeOut {
+			ck.leaderId = (ck.leaderId + 1) % int64(len(ck.servers))
+			continue
+		}
+		ck.commandId++
+		return reply.Value
+	}
 }

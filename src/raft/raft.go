@@ -46,6 +46,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 
 	// For 2D:
 	SnapshotValid bool
@@ -124,6 +125,10 @@ func (rf *Raft) GetState() (int, bool) {
 	isleader = (rf.role == LEADER)
 
 	return term, isleader
+}
+
+func (rf *Raft) Who() int {
+	return rf.me
 }
 
 //
