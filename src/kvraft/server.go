@@ -94,9 +94,11 @@ func (kv *KVServer) applier() {
 				kv.mu.Lock()
 				if msg.CommandIndex <= kv.lastApplied {
 					DPrintf("[Node %v] discards outdated message %v, newer lastApplied is %v", kv.rf.Who(), msg, kv.lastApplied)
+					kv.mu.Unlock()
 					continue
 				}
 				kv.lastApplied = msg.CommandIndex
+
 				var reply *CommandReply
 				command := msg.Command.(Command)
 				if command.Op != OP_GET && kv.isDuplicatedRequest(command.ClientId, command.CommandId) {
@@ -189,6 +191,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.dead = 0
 	kv.lastApplied = 0
 	kv.lastOperations = make(map[int64]OperationInfo)
 	kv.stateMachine = newMemoryKV()
