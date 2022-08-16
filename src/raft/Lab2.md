@@ -1,4 +1,6 @@
-# Lab 2A
+# Lab 2
+
+## Lab 2A
 
 ### Task
 
