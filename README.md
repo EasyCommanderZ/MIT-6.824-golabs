@@ -5,7 +5,7 @@ Video : https://www.bilibili.com/video/BV1R7411t71W
 - [x] [Lab 1 MapReduce](./src/mr/README.md)
 - [x] [Lab 2 Raft](./src/raft/Lab2.md)
 - [x] [Lab 3 KVRaft](./src/kvraft/Lab3.md)
-- [ ] Lab 4 ShardKV
+- [x] Lab [4A](./src/shardctrler/Lab 4A.md) & [4B](./src/shardkv/Lab 4B.md) ShardKV
 
 All checked lab passes the test script. See detail implemantation record in README of each lab.
 
@@ -14,5 +14,5 @@ All checked lab passes the test script. See detail implemantation record in READ
 ### TODO
 
 - [Lab 1] Worker quit gracefully
-
 - [Lab 2] Implementation record && structure doc
+- [Lab 4] Implementation record && structure doc

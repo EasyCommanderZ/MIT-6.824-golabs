@@ -31,3 +31,9 @@ func (rf *Raft) GetRaftStateSize() int {
 	defer rf.mu.Unlock()
 	return rf.persister.RaftStateSize()
 }
+
+func (rf *Raft) HasLogInCurrentTerm() bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.getLastLog().Term == rf.currentTerm
+}
