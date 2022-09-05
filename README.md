@@ -13,6 +13,11 @@ All checked lab passes the test script. See detail implemantation record in READ
 
 ### TODO
 
-- [Lab 1] Worker quit gracefully
 - [Lab 2] Implementation record && structure doc
 - [Lab 4] Implementation record && structure doc
+
+---
+
+### Credit
+
+https://github.com/OneSizeFitsQuorum/MIT6.824-2021/

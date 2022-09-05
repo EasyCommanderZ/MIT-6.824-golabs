@@ -7,7 +7,7 @@ http://nil.csail.mit.edu/6.824/2020/labs/raft-structure.txt
   - AppendEntries
   - RequestVote RPCs
   - RPC Replies
-- It hash to execute periodic tasks:
+- It has to execute periodic tasks:
   - elections
   - Heart-beats
 

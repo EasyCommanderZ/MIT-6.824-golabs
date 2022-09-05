@@ -216,7 +216,7 @@ func (rf *Raft) sendAppendEntryAndUpdate(serverId int, args *AppendEntriesArgs) 
 
 func (rf *Raft) leaderCommitLog() {
 	// leader rule 4
-	// if there exists an N such that N > commitIndex, a mojority of mattchIndex[i] >= N, and log[N].term == currentTerm: set commitIndex = N
+	// if there exists an N such that N > commitIndex, a mojority of matchIndex[i] >= N, and log[N].term == currentTerm: set commitIndex = N
 	if rf.role != LEADER {
 		return
 	}
